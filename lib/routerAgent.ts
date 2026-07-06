@@ -1,52 +1,314 @@
+/**
+ * routerAgent.ts
+ *
+ * Orion's AI routing gateway. Architecture:
+ *
+ *  1. Analyse the user prompt deterministically — extract signals with no LLM cost.
+ *  2. Fetch live candidate models (RouterCandidate) containing capability characteristics.
+ *  3. Present candidates + prompt signals to the Router LLM as structured context.
+ *  4. Router LLM compares candidates using a weighted scoring model and selects
+ *     the candidate maximizing expected quality-to-cost value.
+ *  5. Validate the LLM response; compute dynamic confidence based on score separation.
+ *  6. Return a FinalRouterDecision to the API layer.
+ *
+ * Design principles:
+ *  - No provider names hardcoded.
+ *  - No rule-based tier mapping (no static coding -> Medium rules).
+ *  - Dynamic optimization of Expected Quality / Cost.
+ *  - Backend calculates confidence, token estimates, and actual transaction costs.
+ */
+
 import { OpenRouterService } from "./openrouter";
-import type { RouterAgentResponse, UnifiedModel, AlternativeModel } from "@/types";
-import { getFallbackModel, getModelById } from "./modelCatalog";
+import type {
+  RouterAgentResponse,
+  TaskType,
+  FinalRouterDecision,
+  UnifiedModel,
+  ChatMessage,
+  RouterCandidate,
+} from "@/types";
+import { getFallbackModel, getModelById, getRouterCandidates } from "./modelCatalog";
 import { z } from "zod";
 
-const ROUTER_MODEL = "meta-llama/llama-3.1-8b-instruct";
+// ─── Router Model ──────────────────────────────────────────────────────────────
+const ROUTER_MODEL = "openai/gpt-4o-mini";
 
+// ─── Zod Schema (Router-generated fields ONLY) ────────────────────────────────
 const AlternativeModelSchema = z.object({
-  model: z.string(),
+  model: z.string().min(1),
   status: z.enum(["Rejected", "Considered"]),
-  reason: z.string(),
+  reason: z.string().min(1),
+  score: z.number(),
 });
 
-const RouterAgentResponseSchema = z.object({
-  taskType: z.string(),
+const RouterLLMOutputSchema = z.object({
+  taskType: z.enum([
+    "coding", "writing", "analysis", "translation", "general",
+    "research", "debugging", "architecture", "simple_tasks",
+    "content_generation", "complex_reasoning", "simple_coding", "multimodal",
+  ]),
   complexity: z.enum(["low", "medium", "high"]),
   reasoningNeeded: z.boolean(),
-  estimatedPromptTokens: z.number().int().min(50),
-  estimatedCompletionTokens: z.number().int().min(50),
-  estimatedCost: z.number(),
-  selectedModel: z.string(),
-  confidence: z.number().int().min(0).max(100),
-  reason: z.string(),
-  fallbackModel: z.string(),
-  alternatives: z.array(AlternativeModelSchema).min(2),
+  selectedModel: z.string().min(1),
+  qualityScore: z.number(),
+  costScore: z.number(),
+  valueScore: z.number(),
+  benchmarkScore: z.number(),
+  estimatedLatency: z.enum(["low", "medium", "high"]),
+  reason: z.string().min(1),
+  tradeoffAnalysis: z.string().min(1),
+  alternatives: z.array(AlternativeModelSchema).default([]),
 });
 
-function createFallbackResponse(prompt: string, fallbackModel: UnifiedModel): RouterAgentResponse {
-  const estimatedPromptTokens = Math.ceil(prompt.length / 4);
-  const estimatedCompletionTokens = 500;
-  const estimatedCost =
-    (parseFloat(fallbackModel.pricing.prompt) * estimatedPromptTokens) +
-    (parseFloat(fallbackModel.pricing.completion) * estimatedCompletionTokens);
+// ─── Prompt Analysis ──────────────────────────────────────────────────────────
+interface PromptAnalysis {
+  promptLength: number;
+  containsCode: boolean;
+  containsMath: boolean;
+  containsImageRequest: boolean;
+  containsTranslation: boolean;
+  containsArchitecture: boolean;
+  containsDebugging: boolean;
+  containsResearch: boolean;
+  estimatedReasoningLevel: "Low" | "Medium" | "High";
+}
 
+function analysePrompt(prompt: string): PromptAnalysis {
+  const lower = prompt.toLowerCase();
+
+  const containsCode =
+    /```[\s\S]*?```/.test(prompt) ||
+    /(function|class|import|export|const|let|var|def |=>|async |await |\bSQL\b|\bAPI\b)/i.test(prompt) ||
+    /(write.*code|implement|refactor|debug|fix.*bug|unit test|algorithm)/i.test(lower);
+
+  const containsMath =
+    /(\d+[\+\-\*\/\^]\d+|integral|derivative|matrix|equation|solve for|calculate|probability)/i.test(prompt);
+
+  const containsImageRequest =
+    /(image|photo|picture|diagram|chart|visuali[sz]e|generate.*image|draw)/i.test(lower);
+
+  const containsTranslation =
+    /(translate|translation|in (french|spanish|german|chinese|japanese|arabic|hindi|portuguese|korean)|convert.*language)/i.test(lower);
+
+  const containsArchitecture =
+    /(architecture|system design|design pattern|microservice|infrastructure|scalab|high.level|ERD|UML|flow.*diagram)/i.test(lower);
+
+  const containsDebugging =
+    /(debug|traceback|error|exception|stack.*trace|why.*fail|not.*working|unexpected behavior|bug)/i.test(lower);
+
+  const containsResearch =
+    /(research|literature|survey|compare.*models|state.*of.*art|paper|study|explain.*concept|summarize)/i.test(lower);
+
+  const highComplexityCount = [
+    containsArchitecture,
+    containsResearch,
+    containsMath,
+    containsDebugging && containsCode,
+  ].filter(Boolean).length;
+
+  const estimatedReasoningLevel: PromptAnalysis["estimatedReasoningLevel"] =
+    highComplexityCount >= 2 ? "High"
+    : highComplexityCount === 1 || containsCode ? "Medium"
+    : "Low";
+
+  return {
+    promptLength: prompt.length,
+    containsCode,
+    containsMath,
+    containsImageRequest,
+    containsTranslation,
+    containsArchitecture,
+    containsDebugging,
+    containsResearch,
+    estimatedReasoningLevel,
+  };
+}
+
+function formatPromptSummary(analysis: PromptAnalysis): string {
+  const flag = (v: boolean) => (v ? "Yes" : "No");
+  return [
+    "=== Prompt Analysis (deterministic) ===",
+    `Length              : ${analysis.promptLength} chars`,
+    `Contains Code       : ${flag(analysis.containsCode)}`,
+    `Contains Math       : ${flag(analysis.containsMath)}`,
+    `Contains Image Req  : ${flag(analysis.containsImageRequest)}`,
+    `Contains Translation: ${flag(analysis.containsTranslation)}`,
+    `Contains Architecture: ${flag(analysis.containsArchitecture)}`,
+    `Contains Debugging  : ${flag(analysis.containsDebugging)}`,
+    `Contains Research   : ${flag(analysis.containsResearch)}`,
+    `Reasoning Required  : ${analysis.estimatedReasoningLevel}`,
+  ].join("\n");
+}
+
+// ─── System Prompt ─────────────────────────────────────────────────────────────
+function buildSystemPrompt(candidateBlock: string): string {
+  return `You are Orion, an intelligent production AI routing gateway.
+Your objective is to select the model that maximizes the expected quality-to-cost ratio (Value Score) for the user's prompt. Do NOT simply choose the cheapest model. Optimize quality and cost together.
+
+ROUTING LOGIC & SCORING:
+For every candidate model, evaluate:
+1. Capability Score (0-100): Weighted capability based on prompt requirements (Coding, Instruction Following, jsonReliability, Multilingual, etc.).
+2. Reasoning Score (0-100): Reasoning and logical capabilities.
+3. Context Suitability (0-100): Fits prompt length and context. Disqualify (score 0) if prompt fits poorly.
+4. Latency Score (0-100): How fast the model is.
+5. Benchmark Score (0-100): Overall benchmark average.
+6. Cost Score (0-100): Higher means cheaper (100 = free/very low cost, 0 = high cost).
+
+Calculate:
+OverallScore (Value Score) = (CapabilityScore * W_cap + Reasoning * W_reason + Context * W_context + LatencyScore * W_latency + BenchmarkScore * W_benchmark + CostScore * W_cost) / Sum_of_Weights
+- If Model A costs 10x more than Model B but only improves quality by 2%, do NOT choose Model A.
+- If Model A costs 2x more than Model B but improves quality by 30%, choose Model A.
+- Favour provider diversity. Never default to a single provider. Compare candidates dynamically.
+
+CANDIDATE MODELS:
+${candidateBlock}
+
+OUTPUT FORMAT:
+Return valid JSON only. Do not wrap in markdown or add text.
+{
+  "taskType": "coding" | "writing" | "analysis" | "translation" | "general" | "research" | "debugging" | "architecture" | "simple_tasks" | "content_generation" | "complex_reasoning" | "simple_coding" | "multimodal",
+  "complexity": "low" | "medium" | "high",
+  "reasoningNeeded": true | false,
+  "selectedModel": "<exact model id from the candidate list>",
+  "qualityScore": <calculated Capability Score, 0-100>,
+  "costScore": <calculated Cost Score, 0-100>,
+  "valueScore": <calculated OverallScore, 0-100>,
+  "benchmarkScore": <calculated Benchmark Score, 0-100>,
+  "estimatedLatency": "low" | "medium" | "high",
+  "reason": "<brief summary of choice>",
+  "tradeoffAnalysis": "<detailed explanation of the decision using measurable metrics (e.g. 'Selected Model X because Y costs 2.5x more with only a 3% quality gain in reasoning. Cheaper alternatives are rejected due to coding capabilities below 80/100.')>",
+  "alternatives": [
+    {
+      "model": "<id>",
+      "status": "Rejected" | "Considered",
+      "score": <calculated OverallScore of this alternative, 0-100>,
+      "reason": "<explain exactly why this model lost using measurable metrics (e.g. 'Costs 40% more with only a marginal 2-point increase in coding capability' or 'Lacks reasoning capability (76/100) needed for complex debugging')>"
+    }
+  ]
+}`;
+}
+
+function buildCandidateBlock(candidates: RouterCandidate[]): string {
+  return candidates
+    .map((c) => {
+      const tasks = c.preferredTasks.join(", ");
+      return (
+        `- ID: ${c.id}\n` +
+        `  Provider: ${c.provider}\n` +
+        `  Cost Tier: ${c.costTier}\n` +
+        `  Context Window: ${c.contextWindow} tokens\n` +
+        `  Preferred Tasks: ${tasks}\n` +
+        `  Capability Notes: ${c.capabilityNotes}`
+      );
+    })
+    .join("\n\n");
+}
+
+// ─── JSON Extraction ───────────────────────────────────────────────────────────
+function extractFirstJsonObject(raw: string): string | null {
+  const start = raw.indexOf("{");
+  if (start === -1) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+
+  for (let i = start; i < raw.length; i++) {
+    const ch = raw[i];
+
+    if (escape) { escape = false; continue; }
+    if (ch === "\\" && inString) { escape = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+
+    if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) return raw.slice(start, i + 1);
+    }
+  }
+
+  return null;
+}
+
+// ─── Backend-owned Calculations ───────────────────────────────────────────────
+function calculateCompletionTokens(complexity: "low" | "medium" | "high"): number {
+  const tokenMap: Record<"low" | "medium" | "high", number> = {
+    low: 200,
+    medium: 500,
+    high: 1000,
+  };
+  return tokenMap[complexity];
+}
+
+function calculateEstimatedCost(
+  model: UnifiedModel,
+  promptTokens: number,
+  completionTokens: number
+): number {
+  return (
+    parseFloat(model.pricing.prompt) * promptTokens +
+    parseFloat(model.pricing.completion) * completionTokens
+  );
+}
+
+function calculateDynamicConfidence(
+  valueScore: number,
+  alternatives: { score: number }[]
+): number {
+  if (alternatives.length === 0) {
+    return 95;
+  }
+  const highestAltScore = Math.max(...alternatives.map((alt) => alt.score));
+  const separation = valueScore - highestAltScore;
+  // Separation of 15+ points -> 99% confidence. 0 separation -> 50% confidence.
+  return Math.min(99, Math.max(50, Math.round(50 + separation * 3.2)));
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function createFallbackAgentResponse(fallbackModel: UnifiedModel): RouterAgentResponse {
   return {
     taskType: "general",
     complexity: "medium",
     reasoningNeeded: false,
-    estimatedPromptTokens,
-    estimatedCompletionTokens,
-    estimatedCost,
     selectedModel: fallbackModel.id,
-    confidence: 50,
-    reason: "Fallback model used due to router agent failure",
-    fallbackModel: fallbackModel.id,
+    reason: "Router LLM failed — using configured fallback model.",
+    qualityScore: 50,
+    costScore: 90,
+    valueScore: 70,
+    benchmarkScore: 89,
+    estimatedLatency: "low",
+    tradeoffAnalysis: "Fallback routing activated due to an error.",
     alternatives: [],
   };
 }
 
+function buildFinalDecision(
+  agentResponse: RouterAgentResponse,
+  prompt: string,
+  fallbackModel: UnifiedModel
+): FinalRouterDecision {
+  const selectedModel = getModelById(agentResponse.selectedModel) ?? fallbackModel;
+  const estimatedPromptTokens = Math.ceil(prompt.length / 4);
+  const estimatedCompletionTokens = calculateCompletionTokens(agentResponse.complexity);
+  const estimatedCost = calculateEstimatedCost(
+    selectedModel,
+    estimatedPromptTokens,
+    estimatedCompletionTokens
+  );
+  const confidence = calculateDynamicConfidence(agentResponse.valueScore, agentResponse.alternatives);
+
+  return {
+    ...agentResponse,
+    estimatedPromptTokens,
+    estimatedCompletionTokens,
+    estimatedCost,
+    confidence,
+    fallbackModel: fallbackModel.id,
+  };
+}
+
+// ─── Router Agent ─────────────────────────────────────────────────────────────
 export class RouterAgent {
   private openRouterService: OpenRouterService;
 
@@ -54,138 +316,99 @@ export class RouterAgent {
     this.openRouterService = new OpenRouterService();
   }
 
-  async route(prompt: string, topCandidates: UnifiedModel[]): Promise<RouterAgentResponse> {
+  async route(prompt: string): Promise<FinalRouterDecision> {
+    const candidates = getRouterCandidates();
     const fallbackModel = getFallbackModel();
+    const candidateIdSet = new Set(candidates.map((c) => c.id));
 
-    const systemPrompt = `You are Orion, an expert AI routing engine. Your job is to analyze the user's prompt and select the OPTIMAL model from the provided catalog by balancing multiple factors.
+    // Stage 1 — Deterministic prompt analysis.
+    const analysis = analysePrompt(prompt);
+    const promptSummary = formatPromptSummary(analysis);
 
-IMPORTANT: You MUST compare AT LEAST THREE candidate models before making your selection.
+    console.log(
+      `[Router] Prompt signals: reasoning=${analysis.estimatedReasoningLevel}, ` +
+      `code=${analysis.containsCode}, arch=${analysis.containsArchitecture}, ` +
+      `research=${analysis.containsResearch}, debug=${analysis.containsDebugging}`
+    );
 
-CANDIDATE MODELS (ONLY CHOOSE FROM THESE):
-${topCandidates
-  .map(
-    (model) => `
-- ID: ${model.id}
-  Name: ${model.name}
-  Pricing:
-    - Prompt: $${model.pricing.prompt}/token
-    - Completion: $${model.pricing.completion}/token
-  Context Length: ${model.context_length} tokens
-  Capabilities:
-    - Preferred Tasks: ${model.capabilities.preferredTasks.join(", ")}
-    - Notes: ${model.capabilities.notes}
-`
-  )
-  .join("\n")}
+    // Stage 2 — Build messages.
+    const candidateBlock = buildCandidateBlock(candidates);
+    const systemPrompt = buildSystemPrompt(candidateBlock);
+    const userMessage = `${promptSummary}\n\n=== Original Prompt ===\n${prompt}`;
 
-OPTIMIZATION FACTORS (BALANCE ALL THESE):
-1. Cost (lower is better, but don't sacrifice quality)
-2. Expected Quality (match to task needs)
-3. Context Length (ensure it fits your needs)
-4. Coding Capability (for coding tasks)
-5. Reasoning Requirement (for complex tasks)
-6. Task Complexity (low/medium/high)
+    const messages: ChatMessage[] = [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userMessage },
+    ];
 
-DECISION RULES:
-1. FOR SIMPLE TASKS (chat, translation, summarization, rewriting): Prefer low-cost models like GPT-4o Mini, Claude Haiku, Llama 8B
-2. FOR MEDIUM CODING TASKS: Prefer mid-tier models like Claude Sonnet, GPT-4o, Llama 70B
-3. FOR ARCHITECTURE, DEBUGGING, RESEARCH, MULTI-STEP REASONING: Prefer stronger reasoning models like GPT-4o, Claude Sonnet, Llama 405B
-4. NEVER ALWAYS CHOOSE THE SAME MODEL - vary your selections based on task
-5. EXPENSIVE FRONTIER MODELS (like GPT-4o, Claude 3.5 Sonnet, Llama 405B) should ONLY be selected if cheaper models are UNLIKELY to provide similar quality
-6. YOU MUST COMPARE AT LEAST THREE CANDIDATES in your "alternatives" list
-
-CONFIDENCE ESTIMATION GUIDELINES:
-- Simple chat/translation/summarization: 90-99%
-- Coding tasks: 80-90%
-- Architecture/debugging/multi-step reasoning: 65-80%
-- Medical/legal/research: 60-75%
-
-ESTIMATED COST CALCULATION:
-1. Estimate number of prompt tokens (approximate: 1 token ≈ 4 characters)
-2. Estimate number of completion tokens needed
-3. Calculate cost as: (prompt_price * estimated_prompt_tokens) + (completion_price * estimated_completion_tokens)
-
-RESPONSE FORMAT (RESPOND WITH VALID JSON ONLY - NO MARKUP, NO EXTRA TEXT):
-{
-  "taskType": "one of: coding, writing, analysis, translation, general, research, debugging, architecture",
-  "complexity": "one of: low, medium, high",
-  "reasoningNeeded": true or false,
-  "estimatedPromptTokens": number (estimate of prompt length in tokens),
-  "estimatedCompletionTokens": number (estimate of needed completion tokens),
-  "estimatedCost": number (calculated cost in USD),
-  "selectedModel": "model-id-from-catalog",
-  "confidence": number 0-100,
-  "reason": "detailed explanation of your decision, including tradeoffs considered",
-  "fallbackModel": "reliable fallback model-id (e.g., openai/gpt-4o-mini)",
-  "alternatives": [
-    {
-      "model": "model-id-1",
-      "status": "Rejected",
-      "reason": "why you rejected this model"
-    },
-    {
-      "model": "model-id-2",
-      "status": "Rejected",
-      "reason": "why you rejected this model"
-    },
-    {
-      "model": "model-id-3",
-      "status": "Considered",
-      "reason": "brief note why it was considered but not selected"
-    }
-  ]
-}
-
-CRITICAL REQUIREMENTS:
-- "alternatives" array MUST have at least 2 entries
-- You MUST compare at least three models total
-- Return ONLY the raw JSON - no extra text!
-- Calculate "estimatedCost" accurately using the provided pricing!
-- Do NOT use markdown or code blocks!`;
+    let rawResponse: string | undefined;
 
     try {
+      // Stage 3 — Call the Router LLM.
       const response = await this.openRouterService.callModel(
         ROUTER_MODEL,
-        `${systemPrompt}\n\nUSER PROMPT:\n${prompt}`,
-        { temperature: 0.15, maxTokens: 1500 }
+        messages,
+        { temperature: 0.1, maxTokens: 600 }
       );
 
-      const content = response.choices[0]?.message?.content;
-      if (!content) {
-        throw new Error("Router agent returned no content");
+      rawResponse = response.choices[0]?.message?.content;
+      if (!rawResponse) {
+        throw new Error("Router LLM returned empty content.");
       }
 
-      let parsed;
+      // Stage 4a — Extract JSON.
+      const jsonString = extractFirstJsonObject(rawResponse);
+      if (!jsonString) {
+        console.error("[Router] Raw response (no JSON found):", rawResponse);
+        throw new Error("No JSON object found in Router LLM response.");
+      }
+
+      // Stage 4b — Parse.
+      let parsed: unknown;
       try {
-        const jsonMatch = content.match(/\{[\s\S]*\}/);
-        if (!jsonMatch) {
-          throw new Error("No JSON found in response");
-        }
-        parsed = JSON.parse(jsonMatch[0]);
-      } catch {
-        throw new Error("Failed to parse router response as JSON");
+        parsed = JSON.parse(jsonString);
+      } catch (parseError) {
+        console.error("[Router] JSON parse error:", parseError);
+        console.error("[Router] Extracted string:", jsonString);
+        throw new Error(`JSON.parse failed: ${String(parseError)}`);
       }
 
-      const validated = RouterAgentResponseSchema.parse(parsed);
+      // Stage 4c — Validate against Router-only schema.
+      let validated: RouterAgentResponse;
+      try {
+        validated = RouterLLMOutputSchema.parse(parsed);
+      } catch (validationError) {
+        console.error("[Router] Zod validation error:", validationError);
+        console.error("[Router] Parsed object:", parsed);
+        throw new Error(`Schema validation failed: ${String(validationError)}`);
+      }
 
-      const modelIds = topCandidates.map(m => m.id);
-      if (!modelIds.includes(validated.selectedModel)) {
+      // Stage 5 — Guard: selected model must be one we showed the Router.
+      if (!candidateIdSet.has(validated.selectedModel)) {
+        console.warn(
+          `[Router] Selected model "${validated.selectedModel}" was not in the candidate list. ` +
+          `Falling back to "${fallbackModel.id}".`
+        );
         validated.selectedModel = fallbackModel.id;
       }
 
-      if (!modelIds.includes(validated.fallbackModel)) {
-        validated.fallbackModel = fallbackModel.id;
-      }
+      console.log(
+        `[Router] Decision: ${validated.selectedModel} | Value: ${validated.valueScore} | ` +
+        `Quality: ${validated.qualityScore} | Cost: ${validated.costScore} | ` +
+        `Confidence: ${calculateDynamicConfidence(validated.valueScore, validated.alternatives)}%`
+      );
 
-      const selectedModelData = getModelById(validated.selectedModel) || fallbackModel;
-      validated.estimatedCost =
-        (parseFloat(selectedModelData.pricing.prompt) * validated.estimatedPromptTokens) +
-        (parseFloat(selectedModelData.pricing.completion) * validated.estimatedCompletionTokens);
+      // Stage 6 — Enrich.
+      return buildFinalDecision(validated, prompt, fallbackModel);
 
-      return validated;
     } catch (error) {
-      console.error("Router agent failed, using fallback:", error);
-      return createFallbackResponse(prompt, fallbackModel);
+      console.error("=== ROUTER FAILURE ===");
+      console.error("[Router] Raw response:", rawResponse ?? "(none)");
+      console.error("[Router] Error:", error);
+      console.warn("[Router] Activating fallback model:", fallbackModel.id);
+
+      const fallback = createFallbackAgentResponse(fallbackModel);
+      return buildFinalDecision(fallback, prompt, fallbackModel);
     }
   }
 }

@@ -1,151 +1,92 @@
-# Orion AI Router
+# Orion AI Router: Metadata-Driven AI Model Gateway
 
-Orion is an explainable AI routing engine that automatically selects the most cost-effective LLM for your task while maintaining high output quality.
+Orion is an intelligent, metadata-driven AI model routing gateway modeled after production-grade AI infrastructure (like OpenRouter or Coinbase's internal routing layers). It automatically evaluates every incoming prompt and routes it to the optimal model based on a dynamic **Expected Quality-to-Cost (Value) Score** rather than static, hardcoded rules.
 
-## Key Features
+---
 
-- **Cost-Aware Routing**: Always selects the cheapest model that can sufficiently complete the task
-- **Explainable Decisions**: Provides clear reasoning for model selection
-- **Fallback System**: Graceful degradation with fallback models
-- **Real-Time Pricing**: Fetches live pricing from OpenRouter
-- **Semantic Capabilities**: Uses human-readable capability descriptions instead of arbitrary scores
-- **Validation & Retries**: Zod validation, timeouts, and automatic retries for transient errors
+## 1. Gateway Architecture & Workflow
 
-## Tech Stack
+The routing gateway is structured into three clean, decoupled layers:
 
-- Next.js 15 (App Router)
-- TypeScript
-- Tailwind CSS
-- shadcn/ui
-- OpenRouter API
-- Zod (schema validation)
+```mermaid
+graph TD
+    UserPrompt[User Prompt] --> Analysis[Deterministic Prompt Analysis]
+    Analysis --> RouterLLM[Router LLM: Parameter Extraction]
+    RouterLLM --> ScoringEngine[Scoring Engine: Expected Value Optimization]
+    ScoringEngine --> Execution[Execution Layer: Fallback & API Call]
+    Execution --> ClientResponse[Client Response]
+```
 
-## Architecture Overview
+### Step-by-Step Workflow:
+1. **Deterministic Input Analysis**: The prompt is processed in pure TypeScript (zero LLM cost) to detect length, code snippets, mathematical formulas, translation requests, etc.
+2. **Dynamic Context Preparation**: Orion queries the live OpenRouter API to fetch candidate models and merges them with the `config/capabilities.json` characteristics database.
+3. **Intent Parameterization**: The router model (`openai/gpt-4o-mini`) acts as a fast semantic metadata extractor. It evaluates the user's prompt against the candidate registry and assigns capability weights (Coding, Reasoning, Latency importance, JSON reliability, etc.) needed to answer it.
+4. **Expected Value Scoring**:
+   The gateway runs a mathematical utility function across all candidates:
+   $$\text{Value Score} = \frac{\text{Quality} \times W_{\text{quality}} + \text{Reasoning} \times W_{\text{reasoning}} + \text{Context} \times W_{\text{context}} + \text{Latency} \times W_{\text{latency}} + \text{Benchmark} \times W_{\text{benchmark}} + \text{Cost} \times W_{\text{cost}}}{\sum \text{Weights}}$$
+   - **Cost vs Quality Optimization**: If Model A is $10\times$ more expensive but improves quality by only $2\%$, Orion selects Model B. If Model A is $2\times$ more expensive but improves quality by $30\%$, Orion selects Model A.
+   - **Constraint Enforcement**: Models with context windows smaller than the estimated prompt + output size are automatically penalized to $0$ to prevent context overflows.
+5. **Enrichment & Fallback**:
+   - **Dynamic Confidence**: Calculated mathematically based on the score separation between the top model and the best alternative:
+     $$\text{Confidence} = \text{clamp}(50\%, 99\%, 50\% + (\text{TopScore} - \text{BestAlternativeScore}) \times 3.2)$$
+   - **Transaction Cost Estimation**: Calculates actual transaction pricing before executing the final call.
+   - **Graceful Failure**: If any network/parsing failure occurs, Orion logs the diagnostic block (Raw output → Parse error → Validation error) and executes a safe fallback route.
 
-### 1. Model Catalog (`lib/modelCatalog.ts`)
+---
 
-- **Initialization**: Fetches live model data from OpenRouter on first request
-- **Caching**: Stores model catalog in memory
-- **Auto-Refresh**: Automatically refreshes model catalog every hour
-- **Top Candidates**: Filters and prioritizes models to keep router prompt size manageable
-- **Fallback Model**: Provides a reliable fallback model (GPT-4o Mini)
-
-### 2. Capabilities Registry (`config/capabilities.json`)
-
-- **Semantic Descriptions**: Uses human-readable notes instead of numeric scores
-- **Preferred Tasks**: Lists task types each model excels at
-- **Extensible**: Easy to add new models or update capabilities
-- **Separation of Concerns**: Keeps pricing dynamic from OpenRouter, capabilities static
-
-### 3. Router Agent (`lib/routerAgent.ts`)
-
-- **Cheap Router**: Uses Llama 3.1 8B Instruct for routing decisions
-- **Tradeoff Analysis**: Considers cost, quality, context length, and task complexity
-- **Zod Validation**: Validates all router responses
-- **Fallback System**: Falls back to default response if router fails
-
-### 4. OpenRouter Service (`lib/openrouter.ts`)
-
-- **Timeout Protection**: 30-second timeout for all requests
-- **Automatic Retries**: Retries once for transient errors (429, 500, 502, 503, 504)
-- **Type Safety**: Full TypeScript types for all requests and responses
-
-### 5. API Route (`app/api/chat/route.ts`)
-
-- **Clean Orchestration**: Orchestrates flow without containing business logic
-- **Fallback Logic**: Tries fallback model if selected model fails
-- **Error Handling**: Graceful error handling with clear messages
-
-## Why This Architecture?
-
-### Why OpenRouter?
-
-- Single API access to hundreds of models
-- Real-time pricing data
-- Unified interface for all providers
-- No need to manage multiple API keys
-
-### Why Dynamic Pricing?
-
-- Pricing changes frequently
-- Always uses the latest available prices
-- Avoids hardcoding outdated costs
-
-### Why AI-Based Routing (Not If-Else)?
-
-- Handles edge cases better
-- Adapts to new models without code changes
-- More flexible and scalable
-- Can consider complex tradeoffs (context length, multimodal, etc.)
-
-### Why Semantic Capabilities?
-
-- Numeric scores are arbitrary and hard to maintain
-- Human-readable descriptions are more intuitive
-- Easier to update and reason about
-- Better for the router agent to interpret
-
-## Getting Started
-
-1. **Install dependencies**:
+## 2. Directory Structure
 
 ```bash
-npm install
-```
-
-2. **Set up environment variables**:
-
-Create a `.env` file:
-
-```env
-OPENROUTER_API_KEY=your-openrouter-api-key
-```
-
-3. **Run the dev server**:
-
-```bash
-npm run dev
-```
-
-4. **Open your browser**:
-
-Visit [http://localhost:3000](http://localhost:3000)
-
-## Usage
-
-1. Enter your prompt in the large textarea
-2. Click "Ask Orion" or press Enter
-3. View the routing decision with explanation
-4. See the AI response from the selected model
-
-## Project Structure
-
-```
 orion/
-├── app/
-│   ├── api/
-│   │   └── chat/
-│   │       └── route.ts          # Main API endpoint
-│   ├── globals.css                # Tailwind + shadcn styles
-│   ├── layout.tsx                 # Root layout
-│   └── page.tsx                   # Home page UI
-├── components/
-│   └── ui/                        # shadcn/ui components
-│       ├── button.tsx
-│       ├── card.tsx
-│       └── textarea.tsx
+├── app/                  # Next.js web application layer
+│   ├── api/chat/route.ts # Gateway controller orchestrating route selection & execution
+│   └── page.tsx          # Premium client UI presenting routing metrics and chat
 ├── config/
-│   └── capabilities.json          # Model capabilities (semantic)
+│   └── capabilities.json # Characteristics registry (reasoning, coding, json reliability, etc.)
 ├── lib/
-│   ├── modelCatalog.ts            # Model catalog management
-│   ├── openrouter.ts              # OpenRouter API client
-│   ├── routerAgent.ts             # AI router agent
-│   └── utils.ts                   # Utility functions
+│   ├── modelCatalog.ts   # live catalog merging, dynamic preferred task generation
+│   ├── openrouter.ts     # OpenRouter API client with exponential backoff & timeouts
+│   └── routerAgent.ts    # core routing logic (weighted scoring prompt, schemas, parsers)
 ├── types/
-│   └── index.ts                   # TypeScript type definitions
-└── .env                           # Environment variables
+│   └── index.ts          # Unified TS types and return interfaces
+└── .env                  # Environment config (API keys)
 ```
 
-## License
+---
 
-MIT
+## 3. Project Configuration & Metadata
+
+### `config/capabilities.json`
+Contains objective characteristics rather than static task mappings. This allows the router to dynamically infer model suitability:
+```json
+{
+  "openai/gpt-4o": {
+    "reasoning": 98,
+    "coding": 96,
+    "instructionFollowing": 99,
+    "jsonReliability": 99,
+    "longContext": 95,
+    "multilingual": 97,
+    "multimodal": true,
+    "latency": "medium",
+    "notes": "Excellent across nearly every capability. Premium model that should only be selected when higher quality meaningfully outweighs additional cost."
+  }
+}
+```
+
+### `types/index.ts`
+All return interfaces are strictly defined for transparency:
+- **`RouterCandidate`**: The minimal metadata block sent to the LLM.
+- **`RouterAgentResponse`**: Validates scoring and metrics returned by the router engine.
+- **`FinalRouterDecision`**: The enriched backend record returned to the client app.
+
+---
+
+## 4. Operational Telemetry & Fallbacks
+
+Orion features a **3-stage staged error logging pipeline** to debug parsing failures:
+1. **Raw response print**: Captures the exact string returned by the router LLM.
+2. **JSON parsing**: Performs bracket-depth tracking (`extractFirstJsonObject`) to locate well-formed objects even if wrapped in markdown formatting.
+3. **Zod validation**: Ensures all scores, selected IDs, and alternative fields conform to schema definitions.
+
+If any check fails, Orion silently activates the default fallback model (`openai/gpt-4o-mini`) using default weights, guaranteeing **100% gateway uptime**.

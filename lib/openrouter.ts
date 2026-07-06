@@ -1,4 +1,4 @@
-import type { CallModelOptions, CallModelResponse, OpenRouterModel } from "@/types";
+import type { CallModelOptions, CallModelResponse, OpenRouterModel, ChatMessage } from "@/types";
 
 const OPENROUTER_API_BASE = "https://openrouter.ai/api/v1";
 const RETRY_STATUSES = [429, 500, 502, 503, 504];
@@ -85,10 +85,14 @@ export class OpenRouterService {
 
   async callModel(
     modelId: string,
-    prompt: string,
+    prompt: string | ChatMessage[],
     options: CallModelOptions = {}
   ): Promise<CallModelResponse> {
     const { temperature = 0.7, maxTokens = 1024, topP = 1 } = options;
+
+    const messages = Array.isArray(prompt)
+      ? prompt
+      : [{ role: "user" as const, content: prompt }];
 
     try {
       const response = await this.fetchWithRetry<CallModelResponse>(
@@ -103,12 +107,7 @@ export class OpenRouterService {
           },
           body: JSON.stringify({
             model: modelId,
-            messages: [
-              {
-                role: "user",
-                content: prompt,
-              },
-            ],
+            messages,
             temperature,
             max_tokens: maxTokens,
             top_p: topP,

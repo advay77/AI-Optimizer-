@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { initializeModelCatalog, getTopCandidates, getModelById, getFallbackModel } from "@/lib/modelCatalog";
+import { initializeModelCatalog, getModelById, getFallbackModel } from "@/lib/modelCatalog";
 import { RouterAgent } from "@/lib/routerAgent";
 import { OpenRouterService } from "@/lib/openrouter";
 
@@ -15,9 +15,8 @@ export async function POST(request: Request) {
     }
 
     await initializeModelCatalog();
-    const topCandidates = getTopCandidates();
     const routerAgent = new RouterAgent();
-    const routerDecision = await routerAgent.route(prompt, topCandidates);
+    const routerDecision = await routerAgent.route(prompt);
 
     let selectedModel = getModelById(routerDecision.selectedModel);
     if (!selectedModel) {

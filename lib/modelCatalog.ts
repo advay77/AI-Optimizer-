@@ -1,5 +1,5 @@
 import { OpenRouterService } from "./openrouter";
-import type { ModelCapabilities, UnifiedModel } from "@/types";
+import type { ModelCapabilities, UnifiedModel, RouterCandidate, CostTier } from "@/types";
 import fs from "fs";
 import path from "path";
 
@@ -16,6 +16,61 @@ const defaultCapabilities: ModelCapabilities = {
   notes: "General-purpose model suitable for most tasks.",
   source: "Default capabilities",
 };
+
+function calculateCostTier(promptPrice: string, completionPrice: string): CostTier {
+  const totalPrice = parseFloat(promptPrice) + parseFloat(completionPrice);
+  
+  if (totalPrice <= 0.00001) return "Very Low";
+  if (totalPrice <= 0.0001) return "Low";
+  if (totalPrice <= 0.001) return "Medium";
+  return "High";
+}
+
+function extractProvider(modelId: string): string {
+  const parts = modelId.split("/");
+  return parts.length > 1 ? parts[0] : "Unknown";
+}
+
+function getDynamicPreferredTasks(capabilities: ModelCapabilities): string[] {
+  if (capabilities.preferredTasks) {
+    return capabilities.preferredTasks;
+  }
+  const tasks: string[] = [];
+  if (capabilities.coding && capabilities.coding >= 85) tasks.push("coding");
+  if (capabilities.reasoning && capabilities.reasoning >= 85) tasks.push("complex_reasoning");
+  if (capabilities.instructionFollowing && capabilities.instructionFollowing >= 85) tasks.push("instruction_following");
+  if (capabilities.longContext && capabilities.longContext >= 85) tasks.push("long_context");
+  if (capabilities.multilingual && capabilities.multilingual >= 85) tasks.push("translation");
+  if (capabilities.multimodal) tasks.push("multimodal");
+  if (tasks.length === 0) tasks.push("general");
+  return tasks;
+}
+
+export function buildRouterCandidate(model: UnifiedModel): RouterCandidate {
+  const caps = model.capabilities;
+  const metrics = [
+    caps.reasoning !== undefined ? `Reasoning: ${caps.reasoning}/100` : '',
+    caps.coding !== undefined ? `Coding: ${caps.coding}/100` : '',
+    caps.instructionFollowing !== undefined ? `Instruction Following: ${caps.instructionFollowing}/100` : '',
+    caps.jsonReliability !== undefined ? `JSON Reliability: ${caps.jsonReliability}/100` : '',
+    caps.longContext !== undefined ? `Long Context: ${caps.longContext}/100` : '',
+    caps.multilingual !== undefined ? `Multilingual: ${caps.multilingual}/100` : '',
+    caps.multimodal !== undefined ? `Multimodal: ${caps.multimodal}` : '',
+    caps.latency !== undefined ? `Latency: ${caps.latency}` : '',
+  ].filter(Boolean).join(", ");
+
+  const capabilityNotes = `${metrics}. Notes: ${caps.notes}`;
+
+  return {
+    id: model.id,
+    provider: extractProvider(model.id),
+    costTier: calculateCostTier(model.pricing.prompt, model.pricing.completion),
+    contextWindow: model.context_length,
+    preferredTasks: getDynamicPreferredTasks(model.capabilities),
+    notes: model.capabilities.notes,
+    capabilityNotes,
+  };
+}
 
 async function loadCapabilities(): Promise<Record<string, ModelCapabilities>> {
   try {
@@ -35,7 +90,6 @@ async function fetchAndMergeModels(): Promise<UnifiedModel[]> {
     loadCapabilities(),
   ]);
 
-  // Filter models with valid pricing
   return openRouterModels
     .filter(model => model.pricing && model.pricing.prompt && model.pricing.completion)
     .map((model) => ({
@@ -54,7 +108,6 @@ export async function initializeModelCatalog(): Promise<void> {
     isCatalogInitialized = true;
     console.log(`Model catalog initialized with ${modelCatalog.length} models`);
 
-    // Set up auto-refresh
     if (!refreshInterval) {
       refreshInterval = setInterval(async () => {
         try {
@@ -87,7 +140,7 @@ export function getModelById(modelId: string): UnifiedModel | undefined {
 export function getFallbackModel(): UnifiedModel {
   const fallback = getModelById(FALLBACK_MODEL);
   if (!fallback) {
-    return getModelCatalog()[0]; // Fallback to first model if our fallback isn't available
+    return getModelCatalog()[0];
   }
   return fallback;
 }
@@ -95,7 +148,6 @@ export function getFallbackModel(): UnifiedModel {
 export function getTopCandidates(): UnifiedModel[] {
   const catalog = getModelCatalog();
   
-  // First prioritize models with custom capabilities (we know about them)
   const withKnownCapabilities = catalog.filter(m => m.capabilities.source !== "Default capabilities");
   const sorted = [...withKnownCapabilities].sort((a, b) => {
     const costA = parseFloat(a.pricing.prompt) + parseFloat(a.pricing.completion);
@@ -103,7 +155,6 @@ export function getTopCandidates(): UnifiedModel[] {
     return costA - costB;
   });
   
-  // Take top candidates, fill rest with other models sorted by cost
   const rest = catalog
     .filter(m => !withKnownCapabilities.find(km => km.id === m.id))
     .sort((a, b) => {
@@ -113,6 +164,10 @@ export function getTopCandidates(): UnifiedModel[] {
     });
   
   return [...sorted, ...rest].slice(0, TOP_CANDIDATES_COUNT);
+}
+
+export function getRouterCandidates(): RouterCandidate[] {
+  return getTopCandidates().map(buildRouterCandidate);
 }
 
 export async function refreshModelCatalog(): Promise<void> {

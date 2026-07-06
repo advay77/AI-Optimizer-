@@ -1,42 +1,98 @@
 {
   "meta-llama/llama-3.1-405b-instruct": {
-    "preferredTasks": ["complex_reasoning", "coding", "analysis"],
-    "notes": "Excellent for complex coding, long-context reasoning, and deep technical analysis. Largest Llama model with strong performance across all benchmarks.",
-    "source": "Provider documentation + public benchmark data"
+    "reasoning": 96,
+    "coding": 94,
+    "instructionFollowing": 93,
+    "jsonReliability": 90,
+    "longContext": 98,
+    "multilingual": 90,
+    "multimodal": false,
+    "latency": "high",
+    "notes": "Very strong reasoning and coding model with excellent long-context performance. Higher latency and cost make it suitable only when additional reasoning quality is expected to provide meaningful value.",
+    "source": "OpenRouter + provider documentation + public benchmarks"
   },
   "meta-llama/llama-3.1-70b-instruct": {
-    "preferredTasks": ["reasoning", "coding", "content_generation"],
-    "notes": "Strong all-around performer, great for most coding and reasoning tasks without the cost of 405B.",
-    "source": "Provider documentation + public benchmark data"
+    "reasoning": 91,
+    "coding": 91,
+    "instructionFollowing": 91,
+    "jsonReliability": 88,
+    "longContext": 94,
+    "multilingual": 90,
+    "multimodal": false,
+    "latency": "medium",
+    "notes": "Balanced open-weight model with strong reasoning and coding. Good quality-to-cost ratio for many technical tasks.",
+    "source": "OpenRouter + provider documentation + public benchmarks"
   },
   "meta-llama/llama-3.1-8b-instruct": {
-    "preferredTasks": ["content_generation", "simple_tasks", "translation"],
-    "notes": "Cost-effective for simple content generation, translation, and basic Q&A. Not recommended for complex coding or reasoning.",
-    "source": "Provider documentation + public benchmark data"
+    "reasoning": 76,
+    "coding": 75,
+    "instructionFollowing": 82,
+    "jsonReliability": 80,
+    "longContext": 70,
+    "multilingual": 84,
+    "multimodal": false,
+    "latency": "low",
+    "notes": "Fast and inexpensive model suitable for lightweight conversations, summarization, rewriting and simple coding.",
+    "source": "OpenRouter + provider documentation + public benchmarks"
   },
   "openai/gpt-4o": {
-    "preferredTasks": ["complex_reasoning", "coding", "multimodal"],
-    "notes": "Top-tier model with exceptional reasoning and coding capabilities. Only use for high-value tasks where quality justifies cost.",
-    "source": "Provider documentation + public benchmark data"
+    "reasoning": 98,
+    "coding": 96,
+    "instructionFollowing": 99,
+    "jsonReliability": 99,
+    "longContext": 95,
+    "multilingual": 97,
+    "multimodal": true,
+    "latency": "medium",
+    "notes": "Excellent across nearly every capability. Premium model that should only be selected when higher quality meaningfully outweighs additional cost.",
+    "source": "OpenRouter + provider documentation + public benchmarks"
   },
   "openai/gpt-4o-mini": {
-    "preferredTasks": ["content_generation", "simple_coding", "translation"],
-    "notes": "Excellent balance of quality and cost. Great default for most tasks. Strong in translation and general content generation.",
-    "source": "Provider documentation + public benchmark data"
+    "reasoning": 90,
+    "coding": 89,
+    "instructionFollowing": 94,
+    "jsonReliability": 95,
+    "longContext": 88,
+    "multilingual": 93,
+    "multimodal": true,
+    "latency": "low",
+    "notes": "High value model delivering strong quality at low cost. Excellent default choice when premium reasoning is unnecessary.",
+    "source": "OpenRouter + provider documentation + public benchmarks"
   },
   "anthropic/claude-3.5-sonnet": {
-    "preferredTasks": ["coding", "analysis", "content_generation"],
-    "notes": "Industry-leading coding capabilities, especially for longer codebases. Strong in analysis and content generation.",
-    "source": "Provider documentation + public benchmark data"
+    "reasoning": 97,
+    "coding": 98,
+    "instructionFollowing": 97,
+    "jsonReliability": 96,
+    "longContext": 98,
+    "multilingual": 93,
+    "multimodal": true,
+    "latency": "medium",
+    "notes": "Outstanding coding and reasoning model. Particularly strong for large repositories, debugging and architecture discussions.",
+    "source": "OpenRouter + provider documentation + public benchmarks"
   },
   "anthropic/claude-3-haiku": {
-    "preferredTasks": ["simple_tasks", "translation", "content_generation"],
-    "notes": "Very cost-effective for simple tasks and translation. Not recommended for complex coding or deep reasoning.",
-    "source": "Provider documentation + public benchmark data"
+    "reasoning": 84,
+    "coding": 83,
+    "instructionFollowing": 90,
+    "jsonReliability": 91,
+    "longContext": 84,
+    "multilingual": 90,
+    "multimodal": true,
+    "latency": "low",
+    "notes": "Fast and economical model suitable for everyday chat, summarization and lightweight development tasks.",
+    "source": "OpenRouter + provider documentation + public benchmarks"
   },
   "google/gemini-2.0-flash-exp": {
-    "preferredTasks": ["multimodal", "coding", "reasoning"],
-    "notes": "Strong multimodal capabilities and solid performance on coding and reasoning tasks.",
-    "source": "Provider documentation + public benchmark data"
+    "reasoning": 92,
+    "coding": 90,
+    "instructionFollowing": 93,
+    "jsonReliability": 92,
+    "longContext": 96,
+    "multilingual": 95,
+    "multimodal": true,
+    "latency": "low",
+    "notes": "Efficient multimodal model with good reasoning, long-context support and strong overall value.",
+    "source": "OpenRouter + provider documentation + public benchmarks"
   }
 }

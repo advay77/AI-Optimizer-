@@ -11,10 +11,11 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Loader2, Sparkles, Brain, Zap, DollarSign, Lightbulb } from "lucide-react";
-import type { RouterAgentResponse } from "@/types";
+import type { FinalRouterDecision } from "@/types";
+
 
 interface ChatResponse {
-  routerDecision: RouterAgentResponse;
+  routerDecision: FinalRouterDecision;
   answer: string;
 }
 
