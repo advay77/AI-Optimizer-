@@ -1,0 +1,42 @@
+{
+  "meta-llama/llama-3.1-405b-instruct": {
+    "preferredTasks": ["complex_reasoning", "coding", "analysis"],
+    "notes": "Excellent for complex coding, long-context reasoning, and deep technical analysis. Largest Llama model with strong performance across all benchmarks.",
+    "source": "Provider documentation + public benchmark data"
+  },
+  "meta-llama/llama-3.1-70b-instruct": {
+    "preferredTasks": ["reasoning", "coding", "content_generation"],
+    "notes": "Strong all-around performer, great for most coding and reasoning tasks without the cost of 405B.",
+    "source": "Provider documentation + public benchmark data"
+  },
+  "meta-llama/llama-3.1-8b-instruct": {
+    "preferredTasks": ["content_generation", "simple_tasks", "translation"],
+    "notes": "Cost-effective for simple content generation, translation, and basic Q&A. Not recommended for complex coding or reasoning.",
+    "source": "Provider documentation + public benchmark data"
+  },
+  "openai/gpt-4o": {
+    "preferredTasks": ["complex_reasoning", "coding", "multimodal"],
+    "notes": "Top-tier model with exceptional reasoning and coding capabilities. Only use for high-value tasks where quality justifies cost.",
+    "source": "Provider documentation + public benchmark data"
+  },
+  "openai/gpt-4o-mini": {
+    "preferredTasks": ["content_generation", "simple_coding", "translation"],
+    "notes": "Excellent balance of quality and cost. Great default for most tasks. Strong in translation and general content generation.",
+    "source": "Provider documentation + public benchmark data"
+  },
+  "anthropic/claude-3.5-sonnet": {
+    "preferredTasks": ["coding", "analysis", "content_generation"],
+    "notes": "Industry-leading coding capabilities, especially for longer codebases. Strong in analysis and content generation.",
+    "source": "Provider documentation + public benchmark data"
+  },
+  "anthropic/claude-3-haiku": {
+    "preferredTasks": ["simple_tasks", "translation", "content_generation"],
+    "notes": "Very cost-effective for simple tasks and translation. Not recommended for complex coding or deep reasoning.",
+    "source": "Provider documentation + public benchmark data"
+  },
+  "google/gemini-2.0-flash-exp": {
+    "preferredTasks": ["multimodal", "coding", "reasoning"],
+    "notes": "Strong multimodal capabilities and solid performance on coding and reasoning tasks.",
+    "source": "Provider documentation + public benchmark data"
+  }
+}

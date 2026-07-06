@@ -1,0 +1,71 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-background: #ffffff;
+  --color-foreground: #09090b;
+  --color-card: #ffffff;
+  --color-card-foreground: #09090b;
+  --color-popover: #ffffff;
+  --color-popover-foreground: #09090b;
+  --color-primary: #18181b;
+  --color-primary-foreground: #fafafa;
+  --color-secondary: #f4f4f5;
+  --color-secondary-foreground: #18181b;
+  --color-muted: #f4f4f5;
+  --color-muted-foreground: #71717a;
+  --color-accent: #f4f4f5;
+  --color-accent-foreground: #18181b;
+  --color-destructive: #ef4444;
+  --color-destructive-foreground: #fafafa;
+  --color-border: #e4e4e7;
+  --color-input: #e4e4e7;
+  --color-ring: #09090b;
+  --radius: 0.5rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  @theme inline {
+    --color-background: #09090b;
+    --color-foreground: #fafafa;
+    --color-card: #121214;
+    --color-card-foreground: #fafafa;
+    --color-popover: #121214;
+    --color-popover-foreground: #fafafa;
+    --color-primary: #fafafa;
+    --color-primary-foreground: #18181b;
+    --color-secondary: #242427;
+    --color-secondary-foreground: #fafafa;
+    --color-muted: #242427;
+    --color-muted-foreground: #a1a1aa;
+    --color-accent: #242427;
+    --color-accent-foreground: #fafafa;
+    --color-destructive: #ff5b5b;
+    --color-destructive-foreground: #09090b;
+    --color-border: #242427;
+    --color-input: #242427;
+    --color-ring: #a1a1aa;
+  }
+}
+
+* {
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
+}
+
+html,
+body {
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+body {
+  color: var(--color-foreground);
+  background: var(--color-background);
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
