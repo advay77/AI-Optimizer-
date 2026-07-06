@@ -19,7 +19,6 @@ export async function POST(request: Request) {
     const routerAgent = new RouterAgent();
     const routerDecision = await routerAgent.route(prompt, topCandidates);
 
-    // Validate selected model exists, use fallback if not
     let selectedModel = getModelById(routerDecision.selectedModel);
     if (!selectedModel) {
       selectedModel = getFallbackModel();
@@ -33,7 +32,7 @@ export async function POST(request: Request) {
       modelResponse = await openRouterService.callModel(
         selectedModel.id,
         prompt,
-        { maxTokens: routerDecision.estimatedTokens }
+        { maxTokens: routerDecision.estimatedCompletionTokens }
       );
     } catch (error) {
       console.error(`Failed to use ${selectedModel.id}, trying fallback...`, error);
@@ -42,7 +41,7 @@ export async function POST(request: Request) {
       modelResponse = await openRouterService.callModel(
         fallback.id,
         prompt,
-        { maxTokens: routerDecision.estimatedTokens }
+        { maxTokens: routerDecision.estimatedCompletionTokens }
       );
     }
 
@@ -51,7 +50,7 @@ export async function POST(request: Request) {
     return NextResponse.json({
       routerDecision: {
         ...routerDecision,
-        selectedModel: finalModelUsed, // Update if we used fallback
+        selectedModel: finalModelUsed,
       },
       answer,
     });
