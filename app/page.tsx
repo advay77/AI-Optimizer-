@@ -54,30 +54,101 @@ export default function Home() {
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       handleSubmit();
     }
   };
 
+  const renderFormattedText = (text: string) => {
+    // Split text into paragraphs
+    const paragraphs = text.split("\n\n");
+
+    return paragraphs.map((paragraph, pIndex) => {
+      let formatted = paragraph;
+
+      // Handle headings (###, ####)
+      formatted = formatted.replace(/^###\s+(.*)$/gm, (_, h) => `<h3>${h}</h3>`);
+      formatted = formatted.replace(/^####\s+(.*)$/gm, (_, h) => `<h4>${h}</h4>`);
+
+      // Handle bold text (**text** or __text__)
+      formatted = formatted.replace(/\*\*(.*?)\*\*/g, (_, b) => `<strong>${b}</strong>`);
+      formatted = formatted.replace(/__(.*?)__/g, (_, b) => `<strong>${b}</strong>`);
+
+      // Handle bullet lists (- item or * item)
+      const bulletListRegex = /^([\s]*)([-*])\s+(.*)$/gm;
+      let listStarted = false;
+      let inList = false;
+      let listItems: string[] = [];
+      let result = "";
+      const lines = formatted.split("\n");
+
+      lines.forEach((line, index) => {
+        const bulletMatch = line.match(bulletListRegex);
+        if (bulletMatch) {
+          if (!inList) {
+            inList = true;
+            listStarted = true;
+            result += "<ul>";
+          }
+          const itemText = line.replace(/^[\s]*[-*]\s+/, "");
+          result += `<li>${itemText}</li>`;
+        } else {
+          const numMatch = line.match(/^[\s]*(\d+)\.\s+(.*)$/);
+          if (numMatch) {
+            if (!inList) {
+              inList = true;
+              listStarted = true;
+              result += "<ol>";
+            }
+            result += `<li>${numMatch[2]}</li>`;
+          } else {
+            if (inList) {
+              result += "</ul>";
+              inList = false;
+            }
+            if (line.trim() && !line.startsWith("<h") && !line.startsWith("<li") && !line.startsWith("<ul") && !line.startsWith("<ol")) {
+              result += `<p>${line}</p>`;
+            } else {
+              result += line;
+            }
+          }
+        }
+      });
+
+      if (inList) {
+        result += "</ul>";
+      }
+
+      return (
+        <div
+          key={pIndex}
+          dangerouslySetInnerHTML={{ __html: result }}
+        />
+      );
+    });
+  };
+
   return (
-    <div className="min-h-screen py-8 px-4 md:px-8">
-      <div className="max-w-4xl mx-auto space-y-8">
-        <div className="text-center space-y-2">
-          <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-primary/10 mb-4">
-            <Sparkles className="w-6 h-6 text-primary" />
+    <div className="min-h-screen bg-background py-12 px-4 md:px-8">
+      <div className="max-w-5xl mx-auto space-y-8">
+        {/* Header */}
+        <div className="text-center space-y-4">
+          <div className="inline-flex items-center justify-center w-14 h-14 rounded-lg bg-primary/10 border border-primary/20">
+            <Sparkles className="w-7 h-7 text-primary" />
           </div>
-          <h1 className="text-3xl md:text-4xl font-bold tracking-tight">
+          <h1 className="text-4xl md:text-5xl font-bold tracking-tight">
             Orion AI Router
           </h1>
-          <p className="text-muted-foreground">
-            Balances cost, quality, and capability to find the perfect LLM for your task
+          <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
+            Intelligently routes your requests to the optimal LLM based on cost, quality, and task complexity.
           </p>
         </div>
 
-        <div className="space-y-4">
+        {/* Input Section */}
+        <div className="bg-card rounded-lg border border-border p-6 space-y-4 shadow-sm">
           <Textarea
-            placeholder="Enter your prompt here..."
+            placeholder="Ask anything. Orion will find the best model for your task..."
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -87,133 +158,126 @@ export default function Home() {
           <Button
             onClick={handleSubmit}
             disabled={loading || !prompt.trim()}
+            size="lg"
             className="w-full md:w-auto"
           >
             {loading ? (
               <>
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                Processing...
+                Analyzing...
               </>
             ) : (
               <>
+                <Zap className="w-4 h-4 mr-2" />
                 Ask Orion
-                <Zap className="w-4 h-4 ml-2" />
               </>
             )}
           </Button>
         </div>
 
+        {/* Error State */}
         {error && (
-          <Card className="border-destructive">
-            <CardHeader>
-              <CardTitle className="text-destructive">Error</CardTitle>
-              <CardDescription>{error}</CardDescription>
-            </CardHeader>
-          </Card>
+          <div className="rounded-lg border border-destructive/50 bg-destructive/5 p-4">
+            <h3 className="font-semibold text-destructive mb-1">Error</h3>
+            <p className="text-sm text-destructive/90">{error}</p>
+          </div>
         )}
 
+        {/* Results */}
         {response && (
           <div className="space-y-6">
-            <Card>
-              <CardHeader>
-                <div className="flex items-center gap-2">
+            {/* Routing Decision */}
+            <Card className="shadow-sm">
+              <CardHeader className="pb-4">
+                <div className="flex items-center gap-3">
                   <Brain className="w-5 h-5 text-primary" />
-                  <CardTitle>Routing Decision</CardTitle>
+                  <div>
+                    <CardTitle>Routing Decision</CardTitle>
+                    <CardDescription>Model: <span className="font-semibold text-foreground">{response.routerDecision.selectedModel}</span></CardDescription>
+                  </div>
                 </div>
-                <CardDescription>
-                  How Orion decided which model to use
-                </CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
+                {/* Key Metrics */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <div className="space-y-1">
-                    <p className="text-sm text-muted-foreground">Task Type</p>
-                    <p className="font-medium capitalize">
+                  <div className="rounded-lg bg-secondary p-3 space-y-1">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Task Type</p>
+                    <p className="font-semibold text-sm capitalize">
                       {response.routerDecision.taskType}
                     </p>
                   </div>
-                  <div className="space-y-1">
-                    <p className="text-sm text-muted-foreground">Complexity</p>
-                    <p className="font-medium capitalize">
+                  <div className="rounded-lg bg-secondary p-3 space-y-1">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Complexity</p>
+                    <p className="font-semibold text-sm capitalize">
                       {response.routerDecision.complexity}
                     </p>
                   </div>
-                  <div className="space-y-1">
-                    <p className="text-sm text-muted-foreground flex items-center gap-1">
-                      <DollarSign className="w-3 h-3" />
-                      Estimated Cost
-                    </p>
-                    <p className="font-medium text-green-600 dark:text-green-400">
-                      ${response.routerDecision.estimatedCost.toFixed(6)}
-                    </p>
-                  </div>
-                  <div className="space-y-1">
-                    <p className="text-sm text-muted-foreground">Confidence</p>
-                    <p className="font-medium">
+                  <div className="rounded-lg bg-secondary p-3 space-y-1">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Confidence</p>
+                    <p className="font-semibold text-sm text-primary">
                       {response.routerDecision.confidence}%
                     </p>
                   </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className="space-y-1">
-                    <p className="text-sm text-muted-foreground">Needs Reasoning</p>
-                    <p className="font-medium">
-                      {response.routerDecision.reasoningNeeded ? "Yes" : "No"}
+                  <div className="rounded-lg bg-secondary p-3 space-y-1">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1">
+                      <DollarSign className="w-3 h-3" />
+                      Est. Cost
                     </p>
-                  </div>
-                  <div className="space-y-1">
-                    <p className="text-sm text-muted-foreground">Estimated Prompt Tokens</p>
-                    <p className="font-medium">
-                      {response.routerDecision.estimatedPromptTokens}
-                    </p>
-                  </div>
-                  <div className="space-y-1">
-                    <p className="text-sm text-muted-foreground">Estimated Completion Tokens</p>
-                    <p className="font-medium">
-                      {response.routerDecision.estimatedCompletionTokens}
+                    <p className="font-semibold text-sm">
+                      ${response.routerDecision.estimatedCost.toFixed(6)}
                     </p>
                   </div>
                 </div>
 
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground">Selected Model</p>
-                  <p className="font-medium text-lg">
-                    {response.routerDecision.selectedModel}
-                  </p>
+                {/* Token Info */}
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                  <div className="rounded-lg border border-border p-3">
+                    <p className="text-xs text-muted-foreground mb-1">Prompt Tokens</p>
+                    <p className="font-semibold">{response.routerDecision.estimatedPromptTokens}</p>
+                  </div>
+                  <div className="rounded-lg border border-border p-3">
+                    <p className="text-xs text-muted-foreground mb-1">Completion Tokens</p>
+                    <p className="font-semibold">{response.routerDecision.estimatedCompletionTokens}</p>
+                  </div>
+                  <div className="rounded-lg border border-border p-3">
+                    <p className="text-xs text-muted-foreground mb-1">Reasoning</p>
+                    <p className="font-semibold">{response.routerDecision.reasoningNeeded ? "Yes" : "No"}</p>
+                  </div>
                 </div>
 
-                <div className="space-y-2">
-                  <p className="text-sm text-muted-foreground">
-                    <Lightbulb className="w-3 h-3 inline mr-1" />
-                    Reasoning
-                  </p>
-                  <p className="text-sm leading-relaxed bg-secondary/50 p-3 rounded-md">
+                {/* Reasoning */}
+                <div className="rounded-lg bg-primary/5 border border-primary/10 p-4 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Lightbulb className="w-4 h-4 text-primary" />
+                    <p className="text-sm font-semibold">Reasoning</p>
+                  </div>
+                  <p className="text-sm leading-relaxed text-muted-foreground">
                     {response.routerDecision.reason}
                   </p>
                 </div>
 
+                {/* Alternatives */}
                 {response.routerDecision.alternatives.length > 0 && (
-                  <div className="space-y-2">
-                    <p className="text-sm text-muted-foreground">Alternative Models</p>
-                    <div className="grid grid-cols-1 gap-3">
+                  <div className="space-y-3">
+                    <p className="text-sm font-semibold">Alternative Models</p>
+                    <div className="grid grid-cols-1 gap-2">
                       {response.routerDecision.alternatives.map((alt, index) => (
                         <div
                           key={index}
-                          className="p-3 rounded-md bg-secondary/30 border border-border"
+                          className="p-3 rounded-lg border border-border hover:bg-secondary/30 transition-colors"
                         >
-                          <div className="flex items-center justify-between mb-1">
+                          <div className="flex items-center justify-between gap-3">
                             <span className="font-medium text-sm">{alt.model}</span>
                             <span
-                              className={`text-xs px-2 py-0.5 rounded-full ${alt.status === "Rejected"
-                                ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300"
-                                : "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300"
+                              className={`text-xs font-medium px-2.5 py-1 rounded-full ${alt.status === "Rejected"
+                                ? "bg-destructive/10 text-destructive"
+                                : "bg-accent/10 text-accent"
                                 }`}
                             >
                               {alt.status}
                             </span>
                           </div>
-                          <p className="text-xs text-muted-foreground">
+                          <p className="text-xs text-muted-foreground mt-2">
                             {alt.reason}
                           </p>
                         </div>
@@ -224,16 +288,17 @@ export default function Home() {
               </CardContent>
             </Card>
 
-            <Card>
+            {/* AI Response */}
+            <Card className="shadow-sm">
               <CardHeader>
                 <CardTitle>AI Response</CardTitle>
                 <CardDescription>
-                  From {response.routerDecision.selectedModel}
+                  Powered by {response.routerDecision.selectedModel}
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="text-sm leading-relaxed whitespace-pre-wrap">
-                  {response.answer}
+                <div className="text-sm leading-relaxed [&_h3]:text-lg [&_h3]:font-semibold [&_h3]:mt-4 [&_h3]:mb-2 [&_h4]:text-base [&_h4]:font-semibold [&_h4]:mt-3 [&_h4]:mb-1.5 [&_ul]:ml-5 [&_ul]:list-disc [&_ul]:space-y-1.5 [&_ol]:ml-5 [&_ol]:list-decimal [&_ol]:space-y-1.5 [&_strong]:font-semibold [&_strong]:text-foreground [&_p]:mb-2">
+                  {renderFormattedText(response.answer)}
                 </div>
               </CardContent>
             </Card>

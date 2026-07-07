@@ -1,13 +1,7 @@
 import { NextResponse } from "next/server";
-import { initializeModelCatalog, getModelById, getFallbackModel } from "@/lib/modelCatalog";
+import { initializeModelCatalog, getModelById, getFallbackModel, FALLBACK_CHAIN } from "@/lib/modelCatalog";
 import { RouterAgent } from "@/lib/routerAgent";
 import { OpenRouterService } from "@/lib/openrouter";
-
-const FALLBACK_CHAIN = [
-  "meta-llama/llama-3.1-70b-instruct",
-  "google/gemini-2.0-flash-exp",
-  "openai/gpt-4o-mini"
-];
 
 export async function POST(request: Request) {
   try {
@@ -23,7 +17,7 @@ export async function POST(request: Request) {
     await initializeModelCatalog();
     const routerAgent = new RouterAgent();
     const routerDecision = await routerAgent.route(prompt);
-    const maxTokens = Math.max(routerDecision.estimatedCompletionTokens, 2048); // Give enough tokens for full answers!
+    const maxTokens = Math.max(routerDecision.estimatedCompletionTokens, 1024); // Reduce max tokens to fit budget!
 
     const openRouterService = new OpenRouterService();
     let modelResponse;
@@ -58,14 +52,22 @@ export async function POST(request: Request) {
 
       // If all fallbacks failed, try original fallback model
       if (!modelResponse) {
-        console.log("All fallbacks failed, trying original fallback model");
-        const finalFallback = getFallbackModel();
-        modelResponse = await openRouterService.callModel(
-          finalFallback.id,
-          prompt,
-          { maxTokens }
-        );
-        finalModelUsed = finalFallback.id;
+        try {
+          console.log("All fallbacks failed, trying original fallback model");
+          const finalFallback = getFallbackModel();
+          modelResponse = await openRouterService.callModel(
+            finalFallback.id,
+            prompt,
+            { maxTokens }
+          );
+          finalModelUsed = finalFallback.id;
+        } catch (finalFallbackError) {
+          console.error("All models failed:", finalFallbackError);
+          return NextResponse.json(
+            { error: "All AI models are currently unavailable. Please try again later." },
+            { status: 503 }
+          );
+        }
       }
     }
 

@@ -103,3 +103,55 @@ export interface FinalRouterDecision extends RouterAgentResponse {
   confidence: number;
   fallbackModel: string;
 }
+
+// New types for the modular router
+export interface PromptProfile {
+  taskCategory: TaskType;
+  complexity: "low" | "medium" | "high";
+  estimatedTokenUsage: number;
+  reasoningRequirement: "low" | "medium" | "high";
+  codingRequirement: "low" | "medium" | "high";
+  multimodalRequirement: boolean;
+  longContextRequirement: number; // minimum required context window
+  latencySensitivity: "low" | "medium" | "high";
+  costSensitivity: "low" | "medium" | "high";
+  taskAmbiguity: number; // 0-100
+}
+
+export interface RejectedModel {
+  model: string;
+  reason: string;
+}
+
+export interface WeightedScore {
+  taskFit: number;
+  capability: number;
+  benchmark: number;
+  latency: number;
+  context: number;
+  cost: number;
+  total: number;
+}
+
+export interface TaskWeights {
+  [key: string]: number;
+}
+
+export interface ScoredCandidate {
+  model: UnifiedModel;
+  scores: WeightedScore;
+  totalScore: number;
+}
+
+export interface RouterDecision {
+  promptProfile: PromptProfile;
+  eligibleModels: string[];
+  rejectedModels: RejectedModel[];
+  scoringBreakdown: { model: string; scores: WeightedScore }[];
+  tieBreakReason: string | null;
+  finalSelectedModel: string;
+  confidence: number;
+  estimatedCost: number;
+  estimatedLatency: "low" | "medium" | "high";
+  tradeoffAnalysis: string;
+}

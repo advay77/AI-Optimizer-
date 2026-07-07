@@ -1,92 +1,175 @@
-# Orion AI Router: Metadata-Driven AI Model Gateway
+# Orion AI Router
 
-Orion is an intelligent, metadata-driven AI model routing gateway modeled after production-grade AI infrastructure (like OpenRouter or Coinbase's internal routing layers). It automatically evaluates every incoming prompt and routes it to the optimal model based on a dynamic **Expected Quality-to-Cost (Value) Score** rather than static, hardcoded rules.
+Orion is a smart AI model router that automatically selects the best LLM for your prompt based on cost, quality, latency, and capability — all optimized for value!
 
 ---
 
-## 1. Gateway Architecture & Workflow
+## Table of Contents
 
-The routing gateway is structured into three clean, decoupled layers:
+1. [Architecture](#architecture)
+2. [Data Flow](#data-flow)
+3. [How Models Are Selected](#how-models-are-selected)
+4. [Cost & Token Optimization](#cost--token-optimization)
+5. [Key Metrics](#key-metrics)
+6. [Directory Structure](#directory-structure)
+7. [Setup](#setup)
 
-```mermaid
-graph TD
-    UserPrompt[User Prompt] --> Analysis[Deterministic Prompt Analysis]
-    Analysis --> RouterLLM[Router LLM: Parameter Extraction]
-    RouterLLM --> ScoringEngine[Scoring Engine: Expected Value Optimization]
-    ScoringEngine --> Execution[Execution Layer: Fallback & API Call]
-    Execution --> ClientResponse[Client Response]
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                                   Frontend                                      │
+│                              (app/page.tsx)                                     │
+│  ┌───────────────────────────────────────────────────────────────────────────┐ │
+│  │ Prompt Input → Loading State → Response Display                           │ │
+│  └───────────────────────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                                          │
+                                          │ POST /api/chat
+                                          ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                           Backend API Route                                     │
+│                        (app/api/chat/route.ts)                                  │
+│  ┌───────────────────────────────────────────────────────────────────────────┐ │
+│  │ 1. Initialize Model Catalog (if not cached)                               │ │
+│  │ 2. Run Router Agent to select optimal model                               │ │
+│  │ 3. Call selected model via OpenRouter API                                 │ │
+│  │ 4. Try fallback chain if primary model fails                              │ │
+│  │ 5. Return { routerDecision, answer } to frontend                          │ │
+│  └───────────────────────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────────────────────┘
+        │                          │                          │
+        ▼                          ▼                          ▼
+┌───────────────────┐   ┌───────────────────┐   ┌───────────────────┐
+│  Model Catalog    │   │   Router Agent    │   │ OpenRouter Service│
+│ (modelCatalog.ts) │   │ (routerAgent.ts)  │   │ (openrouter.ts)   │
+│  - Fetch models   │   │  - Analyze prompt │   │  - Call API       │
+│  - Load capabil…  │   │  - Score models   │   │  - Fallbacks      │
+│  - Cache 1 hour   │   │  - Select best    │   │                   │
+└───────────────────┘   └───────────────────┘   └───────────────────┘
 ```
 
-### Step-by-Step Workflow:
-1. **Deterministic Input Analysis**: The prompt is processed in pure TypeScript (zero LLM cost) to detect length, code snippets, mathematical formulas, translation requests, etc.
-2. **Dynamic Context Preparation**: Orion queries the live OpenRouter API to fetch candidate models and merges them with the `config/capabilities.json` characteristics database.
-3. **Intent Parameterization**: The router model (`openai/gpt-4o-mini`) acts as a fast semantic metadata extractor. It evaluates the user's prompt against the candidate registry and assigns capability weights (Coding, Reasoning, Latency importance, JSON reliability, etc.) needed to answer it.
-4. **Expected Value Scoring**:
-   The gateway runs a mathematical utility function across all candidates:
-   $$\text{Value Score} = \frac{\text{Quality} \times W_{\text{quality}} + \text{Reasoning} \times W_{\text{reasoning}} + \text{Context} \times W_{\text{context}} + \text{Latency} \times W_{\text{latency}} + \text{Benchmark} \times W_{\text{benchmark}} + \text{Cost} \times W_{\text{cost}}}{\sum \text{Weights}}$$
-   - **Cost vs Quality Optimization**: If Model A is $10\times$ more expensive but improves quality by only $2\%$, Orion selects Model B. If Model A is $2\times$ more expensive but improves quality by $30\%$, Orion selects Model A.
-   - **Constraint Enforcement**: Models with context windows smaller than the estimated prompt + output size are automatically penalized to $0$ to prevent context overflows.
-5. **Enrichment & Fallback**:
-   - **Dynamic Confidence**: Calculated mathematically based on the score separation between the top model and the best alternative:
-     $$\text{Confidence} = \text{clamp}(50\%, 99\%, 50\% + (\text{TopScore} - \text{BestAlternativeScore}) \times 3.2)$$
-   - **Transaction Cost Estimation**: Calculates actual transaction pricing before executing the final call.
-   - **Graceful Failure**: If any network/parsing failure occurs, Orion logs the diagnostic block (Raw output → Parse error → Validation error) and executes a safe fallback route.
+---
+
+## Data Flow
+
+Here's exactly what happens step by step when a user sends a prompt:
+
+1. **User Input**: User enters prompt in frontend ([`page.tsx`](file:///d:/AI%20optimizer/orion/app/page.tsx))
+2. **API Request**: Frontend sends POST request to `/api/chat` with prompt
+3. **Model Catalog Initialization**:
+   - If not cached, fetch all available models from OpenRouter API ([`openrouter.ts`](file:///d:/AI%20optimizer/orion/lib/openrouter.ts))
+   - Merge with predefined capabilities from [`config/capabilities.json`](file:///d:/AI%20optimizer/orion/config/capabilities.json)
+   - Cache for 1 hour
+4. **Prompt Analysis & Model Selection**:
+   - Analyze prompt to detect task type (coding, translation, writing, etc.) ([`analyzePrompt()`](file:///d:/AI%20optimizer/orion/lib/routerAgent.ts#L24-L37))
+   - Get top 8 models from catalog
+   - Score each model using weighted criteria (see [How Models Are Selected](#how-models-are-selected))
+   - Select model with highest overall value
+5. **Estimate Tokens & Cost**:
+   - `estimatedPromptTokens`: Math.ceil(prompt length / 4)
+   - `estimatedCompletionTokens`: Based on complexity (low: 512, medium: 1024, high: 2048)
+   - `estimatedCost`: (promptPrice × estimatedPromptTokens) + (completionPrice × estimatedCompletionTokens)
+6. **Confidence Calculation**: Based on score difference between top model and second best
+7. **Model Call**:
+   - Try selected model first
+   - If failed, try fallback chain: `meta-llama/llama-3.1-70b-instruct` → `google/gemini-2.0-flash-exp` → `openai/gpt-4o-mini`
+8. **Response Display**: Show routing decision details and AI answer in frontend
 
 ---
 
-## 2. Directory Structure
+## How Models Are Selected
 
-```bash
+Model selection is 100% deterministic (no AI for routing itself!). Each model is scored using weighted criteria:
+
+### Score Components ([`calculateScore()`](file:///d:/AI%20optimizer/orion/lib/routerAgent.ts#L51-L104)):
+
+| Component          | Weight | Description                                                                 |
+|---------------------|--------|-----------------------------------------------------------------------------|
+| **Task Fit**        | —      | How well model matches detected task type (e.g., coding → coding score)     |
+| **Capability**      | ~20%   | (reasoning × 0.25) + (coding × 0.2) + (instructionFollowing × 0.2) + (jsonReliability × 0.15) + (longContext × 0.1) + (multilingual × 0.1) |
+| **Quality**         | —      | (capability × 0.7) + (benchmarkScore × 0.3) (uses 80 if benchmark missing)  |
+| **Latency**         | —      | 100 (low), 70 (medium), 40 (high)                                           |
+| **Context**         | —      | 100 (≥128K tokens), 80 (≥32K), 60 (otherwise)                               |
+| **Cost**            | —      | 100 (very cheap), 90 (cheap), 70 (medium), 40 (expensive)                   |
+| **Overall Value**   | Final  | (taskFit × capability × quality) / (100000 × totalCost) → higher = better    |
+
+### How We Pick the Winner:
+All top 8 models are scored, then sorted by `overallValue` descending. The model with the highest score is selected!
+
+---
+
+## Cost & Token Optimization
+
+Orion is optimized for cost from the ground up:
+
+1. **Aggressive Token Limits**:
+   - Router uses **anthropic/claude-3-haiku** (very cheap) instead of expensive models
+   - Estimated completion tokens capped at reasonable levels based on complexity
+2. **Value-Based Selection**:
+   - Never picks an expensive model unless it provides significant quality improvement
+   - Prioritizes models with high quality-to-cost ratio
+3. **Smart Fallback Chain**:
+   - Starts with most capable fallbacks, then moves to cheaper ones to maximize chance of success while keeping cost low
+4. **Cached Model Catalog**:
+   - Avoids repeated calls to OpenRouter's models API
+   - Refreshes only once per hour
+
+---
+
+## Key Metrics Explained
+
+| Metric                  | Calculation                                                                 |
+|-------------------------|-----------------------------------------------------------------------------|
+| **Task Type**           | Detected via keywords: coding, debugging, writing, translation, etc.        |
+| **Complexity**          | low/medium/high based on whether reasoning/research or coding is needed     |
+| **Estimated Cost**      | Exact cost estimate using OpenRouter's pricing formula                      |
+| **Confidence**          | `clamp(50, 99, 50 + (topScore - secondBestScore) × 3.2)` → 50-99%          |
+| **Quality Score**       | 0-100 score based on model capabilities                                     |
+| **Cost Score**          | 0-100 score (100 = cheapest, 40 = most expensive)                           |
+| **Value Score**         | 0-100 normalized version of `overallValue`                                  |
+
+---
+
+## Directory Structure
+
+```
 orion/
-├── app/                  # Next.js web application layer
-│   ├── api/chat/route.ts # Gateway controller orchestrating route selection & execution
-│   └── page.tsx          # Premium client UI presenting routing metrics and chat
+├── app/                          # Next.js App Router
+│   ├── api/
+│   │   └── chat/
+│   │       └── route.ts          # Backend API route (POST /api/chat)
+│   ├── globals.css
+│   ├── layout.tsx                # Root layout
+│   └── page.tsx                  # Frontend home page
+├── components/
+│   └── ui/                       # Shadcn/ui components
+│       ├── button.tsx
+│       ├── card.tsx
+│       └── textarea.tsx
 ├── config/
-│   └── capabilities.json # Characteristics registry (reasoning, coding, json reliability, etc.)
-├── lib/
-│   ├── modelCatalog.ts   # live catalog merging, dynamic preferred task generation
-│   ├── openrouter.ts     # OpenRouter API client with exponential backoff & timeouts
-│   └── routerAgent.ts    # core routing logic (weighted scoring prompt, schemas, parsers)
+│   └── capabilities.json         # Predefined model capabilities (reasoning, coding, etc.)
+├── lib/                          # Core business logic
+│   ├── modelCatalog.ts           # Model catalog management (fetch, merge, cache)
+│   ├── openrouter.ts             # OpenRouter API client
+│   ├── routerAgent.ts            # Core routing logic (score, select, estimate)
+│   └── utils.ts
+├── public/
 ├── types/
-│   └── index.ts          # Unified TS types and return interfaces
-└── .env                  # Environment config (API keys)
+│   └── index.ts                  # TypeScript interfaces & types
+├── .env                          # Environment variables (API keys)
+├── tsconfig.json
+└── package.json
 ```
 
 ---
 
-## 3. Project Configuration & Metadata
+## Setup
 
-### `config/capabilities.json`
-Contains objective characteristics rather than static task mappings. This allows the router to dynamically infer model suitability:
-```json
-{
-  "openai/gpt-4o": {
-    "reasoning": 98,
-    "coding": 96,
-    "instructionFollowing": 99,
-    "jsonReliability": 99,
-    "longContext": 95,
-    "multilingual": 97,
-    "multimodal": true,
-    "latency": "medium",
-    "notes": "Excellent across nearly every capability. Premium model that should only be selected when higher quality meaningfully outweighs additional cost."
-  }
-}
-```
-
-### `types/index.ts`
-All return interfaces are strictly defined for transparency:
-- **`RouterCandidate`**: The minimal metadata block sent to the LLM.
-- **`RouterAgentResponse`**: Validates scoring and metrics returned by the router engine.
-- **`FinalRouterDecision`**: The enriched backend record returned to the client app.
-
----
-
-## 4. Operational Telemetry & Fallbacks
-
-Orion features a **3-stage staged error logging pipeline** to debug parsing failures:
-1. **Raw response print**: Captures the exact string returned by the router LLM.
-2. **JSON parsing**: Performs bracket-depth tracking (`extractFirstJsonObject`) to locate well-formed objects even if wrapped in markdown formatting.
-3. **Zod validation**: Ensures all scores, selected IDs, and alternative fields conform to schema definitions.
-
-If any check fails, Orion silently activates the default fallback model (`openai/gpt-4o-mini`) using default weights, guaranteeing **100% gateway uptime**.
+1. Copy `.env.example` to `.env`
+2. Add your OpenRouter API key: `OPENROUTER_API_KEY=sk-or-v1-...`
+3. Install dependencies: `npm install`
+4. Run development server: `npm run dev`
+5. Visit `http://localhost:3000`
