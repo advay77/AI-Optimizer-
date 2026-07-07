@@ -36,7 +36,9 @@
     ".next/dev/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    "test-router-flow.ts",
+    "simple-test.js"
   ],
   "ts-node": {
     "esm": false,

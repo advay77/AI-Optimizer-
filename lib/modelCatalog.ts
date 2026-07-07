@@ -8,13 +8,14 @@ let isCatalogInitialized = false;
 let refreshInterval: NodeJS.Timeout | null = null;
 
 const REFRESH_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
-const TOP_CANDIDATES_COUNT = 15;
+const TOP_CANDIDATES_COUNT = 8;
 const FALLBACK_MODEL = "openai/gpt-4o-mini";
 
 const defaultCapabilities: ModelCapabilities = {
   preferredTasks: ["general"],
   notes: "General-purpose model suitable for most tasks.",
   source: "Default capabilities",
+  benchmarkScore: 0
 };
 
 function calculateCostTier(promptPrice: string, completionPrice: string): CostTier {
@@ -48,27 +49,26 @@ function getDynamicPreferredTasks(capabilities: ModelCapabilities): string[] {
 
 export function buildRouterCandidate(model: UnifiedModel): RouterCandidate {
   const caps = model.capabilities;
-  const metrics = [
-    caps.reasoning !== undefined ? `Reasoning: ${caps.reasoning}/100` : '',
-    caps.coding !== undefined ? `Coding: ${caps.coding}/100` : '',
-    caps.instructionFollowing !== undefined ? `Instruction Following: ${caps.instructionFollowing}/100` : '',
-    caps.jsonReliability !== undefined ? `JSON Reliability: ${caps.jsonReliability}/100` : '',
-    caps.longContext !== undefined ? `Long Context: ${caps.longContext}/100` : '',
-    caps.multilingual !== undefined ? `Multilingual: ${caps.multilingual}/100` : '',
-    caps.multimodal !== undefined ? `Multimodal: ${caps.multimodal}` : '',
-    caps.latency !== undefined ? `Latency: ${caps.latency}` : '',
-  ].filter(Boolean).join(", ");
-
-  const capabilityNotes = `${metrics}. Notes: ${caps.notes}`;
+  const costTier = calculateCostTier(model.pricing.prompt, model.pricing.completion);
+  
+  const compactNotes = [
+    `r=${caps.reasoning || 50}`,
+    `c=${caps.coding || 50}`,
+    `i=${caps.instructionFollowing || 70}`,
+    `j=${caps.jsonReliability || 70}`,
+    `ctx=${model.context_length}`,
+    `lat=${caps.latency || "medium"}`,
+    `cost=${costTier}`
+  ].join(",");
 
   return {
     id: model.id,
     provider: extractProvider(model.id),
-    costTier: calculateCostTier(model.pricing.prompt, model.pricing.completion),
+    costTier,
     contextWindow: model.context_length,
     preferredTasks: getDynamicPreferredTasks(model.capabilities),
-    notes: model.capabilities.notes,
-    capabilityNotes,
+    notes: compactNotes,
+    capabilityNotes: compactNotes,
   };
 }
 
@@ -145,25 +145,41 @@ export function getFallbackModel(): UnifiedModel {
   return fallback;
 }
 
+function calculateWeightedScore(model: UnifiedModel): number {
+  const caps = model.capabilities;
+  const reasoning = caps.reasoning || 50;
+  const coding = caps.coding || 50;
+  const instruction = caps.instructionFollowing || 70;
+  const jsonReliability = caps.jsonReliability || 70;
+  const contextLength = model.context_length >= 128000 ? 100 : model.context_length >= 32000 ? 80 : 60;
+  const latencyScore = caps.latency === "low" ? 100 : caps.latency === "medium" ? 70 : 40;
+  
+  const totalCost = parseFloat(model.pricing.prompt) + parseFloat(model.pricing.completion);
+  let costScore = 100;
+  if (totalCost > 0.001) costScore = 40;
+  else if (totalCost > 0.0001) costScore = 70;
+  else if (totalCost > 0.00001) costScore = 90;
+
+  const score = 
+    reasoning * 0.25 + 
+    coding * 0.2 + 
+    instruction * 0.15 + 
+    jsonReliability * 0.1 + 
+    contextLength * 0.1 + 
+    latencyScore * 0.05 + 
+    costScore * 0.15;
+
+  return score;
+}
+
 export function getTopCandidates(): UnifiedModel[] {
   const catalog = getModelCatalog();
-  
-  const withKnownCapabilities = catalog.filter(m => m.capabilities.source !== "Default capabilities");
-  const sorted = [...withKnownCapabilities].sort((a, b) => {
-    const costA = parseFloat(a.pricing.prompt) + parseFloat(a.pricing.completion);
-    const costB = parseFloat(b.pricing.prompt) + parseFloat(b.pricing.completion);
-    return costA - costB;
+  const sorted = [...catalog].sort((a, b) => {
+    const scoreA = calculateWeightedScore(a);
+    const scoreB = calculateWeightedScore(b);
+    return scoreB - scoreA;
   });
-  
-  const rest = catalog
-    .filter(m => !withKnownCapabilities.find(km => km.id === m.id))
-    .sort((a, b) => {
-      const costA = parseFloat(a.pricing.prompt) + parseFloat(a.pricing.completion);
-      const costB = parseFloat(b.pricing.prompt) + parseFloat(b.pricing.completion);
-      return costA - costB;
-    });
-  
-  return [...sorted, ...rest].slice(0, TOP_CANDIDATES_COUNT);
+  return sorted.slice(0, TOP_CANDIDATES_COUNT);
 }
 
 export function getRouterCandidates(): RouterCandidate[] {

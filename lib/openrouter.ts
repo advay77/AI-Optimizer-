@@ -88,7 +88,7 @@ export class OpenRouterService {
     prompt: string | ChatMessage[],
     options: CallModelOptions = {}
   ): Promise<CallModelResponse> {
-    const { temperature = 0.7, maxTokens = 1024, topP = 1 } = options;
+    const { temperature = 0.7, maxTokens = 256, topP = 1 } = options;
 
     const messages = Array.isArray(prompt)
       ? prompt

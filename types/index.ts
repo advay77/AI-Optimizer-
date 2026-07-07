@@ -15,6 +15,7 @@ export interface OpenRouterModel {
 }
 
 export interface ModelCapabilities {
+  benchmarkScore?: number;
   preferredTasks?: string[];
   reasoning?: number;
   coding?: number;
