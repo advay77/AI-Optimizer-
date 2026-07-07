@@ -34,7 +34,7 @@ Orion is a smart AI model router that automatically selects the best LLM for you
 │                        (app/api/chat/route.ts)                                  │
 │  ┌───────────────────────────────────────────────────────────────────────────┐ │
 │  │ 1. Initialize Model Catalog (if not cached)                               │ │
-│  │ 2. Run Router Agent to select optimal model                               │ │
+│  │ 2. Run Router Pipeline (modular) to select optimal model                  │ │
 │  │ 3. Call selected model via OpenRouter API                                 │ │
 │  │ 4. Try fallback chain if primary model fails                              │ │
 │  │ 5. Return { routerDecision, answer } to frontend                          │ │
@@ -43,11 +43,14 @@ Orion is a smart AI model router that automatically selects the best LLM for you
         │                          │                          │
         ▼                          ▼                          ▼
 ┌───────────────────┐   ┌───────────────────┐   ┌───────────────────┐
-│  Model Catalog    │   │   Router Agent    │   │ OpenRouter Service│
-│ (modelCatalog.ts) │   │ (routerAgent.ts)  │   │ (openrouter.ts)   │
-│  - Fetch models   │   │  - Analyze prompt │   │  - Call API       │
-│  - Load capabil…  │   │  - Score models   │   │  - Fallbacks      │
-│  - Cache 1 hour   │   │  - Select best    │   │                   │
+│  Model Catalog    │   │   Router Pipeline │   │ OpenRouter Service│
+│ (modelCatalog.ts) │   │  (lib/router/)    │   │ (openrouter.ts)   │
+│  - Fetch models   │   │  - Prompt Profiler│   │  - Call API       │
+│  - Load capabil…  │   │  - Candidate Filt │   │  - Fallbacks      │
+│  - Cache 1 hour   │   │  - Task Weights   │   │                   │
+│                   │   │  - Scoring        │   │                   │
+│                   │   │  - Tie Breaker    │   │                   │
+│                   │   │  - Confidence     │   │                   │
 └───────────────────┘   └───────────────────┘   └───────────────────┘
 ```
 
@@ -63,41 +66,62 @@ Here's exactly what happens step by step when a user sends a prompt:
    - If not cached, fetch all available models from OpenRouter API ([`openrouter.ts`](file:///d:/AI%20optimizer/orion/lib/openrouter.ts))
    - Merge with predefined capabilities from [`config/capabilities.json`](file:///d:/AI%20optimizer/orion/config/capabilities.json)
    - Cache for 1 hour
-4. **Prompt Analysis & Model Selection**:
-   - Analyze prompt to detect task type (coding, translation, writing, etc.) ([`analyzePrompt()`](file:///d:/AI%20optimizer/orion/lib/routerAgent.ts#L24-L37))
-   - Get top 8 models from catalog
-   - Score each model using weighted criteria (see [How Models Are Selected](#how-models-are-selected))
-   - Select model with highest overall value
+4. **Router Pipeline**:
+   - Step 1: Profile the prompt (detect task type, complexity, requirements) ([`promptProfiler.ts`](file:///d:/AI%20optimizer/orion/lib/router/promptProfiler.ts))
+   - Step 2: Filter eligible candidates (remove models that don't meet requirements) ([`candidateFilter.ts`](file:///d:/AI%20optimizer/orion/lib/router/candidateFilter.ts))
+   - Step 3: Get task‑specific weights for scoring ([`taskWeights.ts`](file:///d:/AI%20optimizer/orion/lib/router/taskWeights.ts))
+   - Step 4: Score each eligible model ([`scorer.ts`](file:///d:/AI%20optimizer/orion/lib/router/scorer.ts))
+   - Step 5: Break ties (provider diversity, latency) ([`tieBreaker.ts`](file:///d:/AI%20optimizer/orion/lib/router/tieBreaker.ts))
+   - Step 6: Calculate confidence in selection ([`confidence.ts`](file:///d:/AI%20optimizer/orion/lib/router/confidence.ts))
 5. **Estimate Tokens & Cost**:
    - `estimatedPromptTokens`: Math.ceil(prompt length / 4)
    - `estimatedCompletionTokens`: Based on complexity (low: 512, medium: 1024, high: 2048)
    - `estimatedCost`: (promptPrice × estimatedPromptTokens) + (completionPrice × estimatedCompletionTokens)
-6. **Confidence Calculation**: Based on score difference between top model and second best
-7. **Model Call**:
+6. **Model Call**:
    - Try selected model first
    - If failed, try fallback chain: `meta-llama/llama-3.1-70b-instruct` → `google/gemini-2.0-flash-exp` → `openai/gpt-4o-mini`
-8. **Response Display**: Show routing decision details and AI answer in frontend
+7. **Response Display**: Show routing decision details and AI answer in frontend
 
 ---
 
 ## How Models Are Selected
 
-Model selection is 100% deterministic (no AI for routing itself!). Each model is scored using weighted criteria:
+Model selection is 100% deterministic (no AI for routing itself!).
 
-### Score Components ([`calculateScore()`](file:///d:/AI%20optimizer/orion/lib/routerAgent.ts#L51-L104)):
+### Step 1: Prompt Profiler
+Extracts task type, complexity, reasoning/coding/multimodal requirements, etc.
 
-| Component          | Weight | Description                                                                 |
-|---------------------|--------|-----------------------------------------------------------------------------|
-| **Task Fit**        | —      | How well model matches detected task type (e.g., coding → coding score)     |
-| **Capability**      | ~20%   | (reasoning × 0.25) + (coding × 0.2) + (instructionFollowing × 0.2) + (jsonReliability × 0.15) + (longContext × 0.1) + (multilingual × 0.1) |
-| **Quality**         | —      | (capability × 0.7) + (benchmarkScore × 0.3) (uses 80 if benchmark missing)  |
-| **Latency**         | —      | 100 (low), 70 (medium), 40 (high)                                           |
-| **Context**         | —      | 100 (≥128K tokens), 80 (≥32K), 60 (otherwise)                               |
-| **Cost**            | —      | 100 (very cheap), 90 (cheap), 70 (medium), 40 (expensive)                   |
-| **Overall Value**   | Final  | (taskFit × capability × quality) / (100000 × totalCost) → higher = better    |
+### Step 2: Candidate Filter
+Hard requirements remove unsuitable models early:
+- Coding tasks: coding score ≥ 70 (high) or ≥ 50 (medium)
+- Translation: multilingual score ≥ 60
+- Multimodal: model must support multimodal input
+- Long context: model's context window ≥ required tokens
+- Rejects deprecated, free, or incomplete models
 
-### How We Pick the Winner:
-All top 8 models are scored, then sorted by `overallValue` descending. The model with the highest score is selected!
+### Step 3: Task‑Specific Scoring
+Each task type uses different weights! Examples ([`taskWeights.ts`](file:///d:/AI%20optimizer/orion/lib/router/taskWeights.ts)):
+
+| Task Type       | Key Weights                                                                 |
+|-----------------|-----------------------------------------------------------------------------|
+| **Coding**      | coding (40%), reasoning (25%), instruction following (15%), JSON (10%)     |
+| **Writing**     | instruction following (35%), reasoning (25%), multilingual (15%), latency (15%), cost (10%) |
+| **Translation** | multilingual (45%), instruction following (25%), reasoning (15%)           |
+| **Architecture**| reasoning (40%), coding (30%), context (15%)                               |
+| **Simple Tasks**| instruction following (30%), latency (30%), cost (25%)                     |
+
+### Step 4: Tie Breaker
+If top scores differ by ≤ 3 points, selects based on:
+1. Provider diversity (different provider than last used model)
+2. Lower latency
+
+### Step 5: Confidence Calculation
+```typescript
+confidence = 50 + (scoreGap * 2.5) 
+           - (taskAmbiguity * 0.2) 
+           - (if candidates > 5 and scoreGap <5 ? 10 : 0)
+clamp 0‑100
+```
 
 ---
 
@@ -106,13 +130,12 @@ All top 8 models are scored, then sorted by `overallValue` descending. The model
 Orion is optimized for cost from the ground up:
 
 1. **Aggressive Token Limits**:
-   - Router uses **anthropic/claude-3-haiku** (very cheap) instead of expensive models
-   - Estimated completion tokens capped at reasonable levels based on complexity
+   - Estimated completion tokens capped at 1024 max to stay within budget
 2. **Value-Based Selection**:
-   - Never picks an expensive model unless it provides significant quality improvement
-   - Prioritizes models with high quality-to-cost ratio
+   - Task‑specific weights ensure we pick the right tool for the job (not just the most expensive model)
+   - Quality‑first, but cost is a factor in tie breaks and simple tasks
 3. **Smart Fallback Chain**:
-   - Starts with most capable fallbacks, then moves to cheaper ones to maximize chance of success while keeping cost low
+   - Starts with capable fallbacks, then moves to cheaper ones
 4. **Cached Model Catalog**:
    - Avoids repeated calls to OpenRouter's models API
    - Refreshes only once per hour
@@ -121,15 +144,13 @@ Orion is optimized for cost from the ground up:
 
 ## Key Metrics Explained
 
-| Metric                  | Calculation                                                                 |
-|-------------------------|-----------------------------------------------------------------------------|
-| **Task Type**           | Detected via keywords: coding, debugging, writing, translation, etc.        |
-| **Complexity**          | low/medium/high based on whether reasoning/research or coding is needed     |
-| **Estimated Cost**      | Exact cost estimate using OpenRouter's pricing formula                      |
-| **Confidence**          | `clamp(50, 99, 50 + (topScore - secondBestScore) × 3.2)` → 50-99%          |
-| **Quality Score**       | 0-100 score based on model capabilities                                     |
-| **Cost Score**          | 0-100 score (100 = cheapest, 40 = most expensive)                           |
-| **Value Score**         | 0-100 normalized version of `overallValue`                                  |
+| Metric                  | Source / Calculation                                                                 |
+|-------------------------|-------------------------------------------------------------------------------------|
+| **Task Type**           | Detected via keywords (coding, debugging, writing, translation, etc.)               |
+| **Complexity**          | low/medium/high based on word count and keywords (see [`promptProfiler.ts`](file:///d:/AI%20optimizer/orion/lib/router/promptProfiler.ts#L31-L37)) |
+| **Estimated Cost**      | Exact cost estimate using OpenRouter's pricing formula                              |
+| **Confidence**          | See [Step 5 in Data Flow](#data-flow)                                              |
+| **Quality Score**       | Average of model capabilities (reasoning, coding, instruction following, etc.)      |
 
 ---
 
@@ -152,9 +173,18 @@ orion/
 ├── config/
 │   └── capabilities.json         # Predefined model capabilities (reasoning, coding, etc.)
 ├── lib/                          # Core business logic
+│   ├── router/                   # Modular router pipeline
+│   │   ├── index.ts              # Pipeline orchestration + exports
+│   │   ├── promptProfiler.ts     # Prompt analysis (task type, complexity, requirements)
+│   │   ├── candidateFilter.ts    # Filter eligible candidates based on requirements
+│   │   ├── taskWeights.ts        # Task‑specific scoring weights
+│   │   ├── scorer.ts             # Weighted scoring of eligible models
+│   │   ├── tieBreaker.ts         # Intelligent tie breaking
+│   │   ├── confidence.ts         # Calculate confidence in selection
+│   │   └── diagnostics.ts        # Detailed logging and diagnostics
 │   ├── modelCatalog.ts           # Model catalog management (fetch, merge, cache)
 │   ├── openrouter.ts             # OpenRouter API client
-│   ├── routerAgent.ts            # Core routing logic (score, select, estimate)
+│   ├── routerAgent.ts            # Compatibility layer (uses new router pipeline)
 │   └── utils.ts
 ├── public/
 ├── types/
@@ -168,8 +198,8 @@ orion/
 
 ## Setup
 
-1. Copy `.env.example` to `.env`
-2. Add your OpenRouter API key: `OPENROUTER_API_KEY=sk-or-v1-...`
+1. Copy `.env.example` to `.env` (create it if needed: `OPENROUTER_API_KEY=sk-or-v1-...`)
+2. Add your OpenRouter API key to `.env`
 3. Install dependencies: `npm install`
 4. Run development server: `npm run dev`
 5. Visit `http://localhost:3000`
