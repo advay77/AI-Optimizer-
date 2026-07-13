@@ -11,12 +11,16 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Loader2, Sparkles, Brain, Zap, DollarSign, Lightbulb } from "lucide-react";
-import type { FinalRouterDecision } from "@/types";
-
+import type { FinalRouterDecision, OrchestratorResponse } from "@/types";
 
 interface ChatResponse {
   routerDecision: FinalRouterDecision;
   answer: string;
+}
+
+interface OrchestrationState {
+  response: OrchestratorResponse | null;
+  isOrchestration: boolean;
 }
 
 export default function Home() {
